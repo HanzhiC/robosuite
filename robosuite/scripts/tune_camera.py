@@ -16,7 +16,9 @@ import robosuite
 import robosuite.utils.transform_utils as T
 from robosuite.utils.camera_utils import CameraMover
 from robosuite.utils.mjcf_utils import find_elements, find_parent
-
+from robosuite.utils.camera_utils import get_camera_intrinsic_matrix, get_real_depth_map, get_camera_extrinsic_matrix
+import os
+import shutil
 # some settings
 DELTA_POS_KEY_PRESS = 0.05  # delta camera position per key press
 DELTA_ROT_KEY_PRESS = 1  # delta camera angle per key press
@@ -132,19 +134,20 @@ if __name__ == "__main__":
     print("")
 
     # read camera XML tag from user input
-    inp = input(
-        "\nPlease paste a camera name below \n"
-        "OR xml tag below (e.g. <camera ... />) \n"
-        "OR leave blank for an example:\n"
-    )
+    # inp = input(
+    #     "\nPlease paste a camera name below \n"
+    #     "OR xml tag below (e.g. <camera ... />) \n"
+    #     "OR leave blank for an example:\n"
+    # )
 
-    if len(inp) == 0:
-        if args.env != "Lift":
-            raise Exception("ERROR: env must be Lift to run default example.")
-        print("\nUsing an example tag corresponding to the frontview camera.")
-        print("This xml tag was copied from robosuite/models/assets/arenas/table_arena.xml")
-        inp = '<camera mode="fixed" name="frontview" pos="1.6 0 1.45" quat="0.56 0.43 0.43 0.56"/>'
-
+    # if len(inp) == 0:
+    #     if args.env != "Lift":
+    #         raise Exception("ERROR: env must be Lift to run default example.")
+    #     print("\nUsing an example tag corresponding to the frontview camera.")
+    #     print("This xml tag was copied from robosuite/models/assets/arenas/table_arena.xml")
+    inp = '<camera mode="fixed" name="frontview" pos="1.6 0 1.45" quat="0.56 0.43 0.43 0.56" fovy="60"/>'
+    # inp = '<camera mode="fixed" name="frontview" pos="0.7305113454683335 7.773833488796949e-08 1.2176430164412786" quat="0.5608418583869934 0.43064644932746887 0.43064630031585693 0.5608417987823486" fovy="60" />'
+    # inp = '<camera mode="fixed" name="frontview" pos="0.7305113454683335 7.773833488796947e-08 1.2176430164412786" quat="0.5041791200637817 0.35908687114715576 0.4957859516143799 0.6091437339782715" fovy="60" />'
     # remember the tag and infer some properties
     from_tag = "<" in inp
     notify_str = (
@@ -164,10 +167,12 @@ if __name__ == "__main__":
         args.env,
         robots=args.robots,
         has_renderer=True,
-        has_offscreen_renderer=False,
+        has_offscreen_renderer=True,
         ignore_done=True,
-        use_camera_obs=False,
-        control_freq=100,
+        use_camera_obs=True,
+        camera_depths=True,
+        control_freq=20,
+        camera_names="frontview",
     )
     env.reset()
 
@@ -182,45 +187,64 @@ if __name__ == "__main__":
     env.viewer.set_camera(camera_id=camera_id)
 
     # Infer initial camera pose
-    if from_tag:
-        initial_file_camera_pos = np.array(cam_tree.get("pos").split(" ")).astype(float)
-        initial_file_camera_quat = T.convert_quat(np.array(cam_tree.get("quat").split(" ")).astype(float), to="xyzw")
-        # Set these values as well
-        camera_mover.set_camera_pose(pos=initial_file_camera_pos, quat=initial_file_camera_quat)
-        # Optionally set fov if specified
-        cam_fov = cam_tree.get("fovy", None)
-        if cam_fov is not None:
-            env.sim.model.cam_fovy[camera_id] = float(cam_fov)
-    else:
-        initial_file_camera_pos, initial_file_camera_quat = camera_mover.get_camera_pose()
+    initial_file_camera_pos = np.array(cam_tree.get("pos").split(" ")).astype(float)
+    initial_file_camera_quat = T.convert_quat(np.array(cam_tree.get("quat").split(" ")).astype(float), to="xyzw")
+    # Set these values as well
+    camera_mover.set_camera_pose(pos=initial_file_camera_pos, quat=initial_file_camera_quat)
+    # Optionally set fov if specified
+    cam_fov = np.float32(cam_tree.get("fovy", 60))
+    env.sim.model.cam_fovy[camera_id] = cam_fov
+
+
     # Define initial file camera pose
     initial_file_camera_pose = T.make_pose(initial_file_camera_pos, T.quat2mat(initial_file_camera_quat))
-
     # remember difference between camera pose in initial tag and absolute camera pose in world
     initial_world_camera_pos, initial_world_camera_quat = camera_mover.get_camera_pose()
     initial_world_camera_pose = T.make_pose(initial_world_camera_pos, T.quat2mat(initial_world_camera_quat))
     world_in_file = initial_file_camera_pose.dot(T.pose_inv(initial_world_camera_pose))
-
+    print(world_in_file)
     # register callbacks to handle key presses in the viewer
     key_handler = KeyboardHandler(camera_mover=camera_mover)
 
     # just spin to let user interact with window
     spin_count = 0
+    # Delete output directory
+    if os.path.exists("outputs/"):
+        shutil.rmtree("outputs/")
+    os.makedirs("outputs2/", exist_ok=True)
     while True:
         action = np.zeros(env.action_dim)
         obs, reward, done, _ = env.step(action)
         env.render()
         spin_count += 1
-        if spin_count % 500 == 0:
+        if spin_count % 10 == 0:
             # convert from world coordinates to file coordinates (xml subtree)
             camera_pos, camera_quat = camera_mover.get_camera_pose()
             world_camera_pose = T.make_pose(camera_pos, T.quat2mat(camera_quat))
             file_camera_pose = world_in_file.dot(world_camera_pose)
             # TODO: Figure out why numba causes black screen of death (specifically, during mat2pose --> mat2quat call below)
-            camera_pos, camera_quat = T.mat2pose(file_camera_pose)
-            camera_quat = T.convert_quat(camera_quat, to="wxyz")
+            
+            obs["frontview_depth"] = get_real_depth_map(env.sim, obs["frontview_depth"])
+            obs["frontview_intrinsics"] = get_camera_intrinsic_matrix(env.sim, "frontview", 256, 256)
+            obs["world_camera_pose"] = world_camera_pose
+            obs["world_camera_pose2"] =  get_camera_extrinsic_matrix(env.sim,  "frontview")
+            obs["file_camera_pose"] = file_camera_pose
+            obs["world_in_file"] = world_in_file
 
-            print("\n\ncurrent camera tag you should copy")
-            cam_tree.set("pos", "{} {} {}".format(camera_pos[0], camera_pos[1], camera_pos[2]))
-            cam_tree.set("quat", "{} {} {} {}".format(camera_quat[0], camera_quat[1], camera_quat[2], camera_quat[3]))
-            print(ET.tostring(cam_tree, encoding="utf8").decode("utf8"))
+            #save the obs
+            output_dir = "outputs/"
+            os.makedirs(output_dir, exist_ok=True)
+            np.savez_compressed(os.path.join(output_dir, f"obs_{spin_count}.npz"), **obs)
+            
+            # if spin_count == 10:
+            #     output_dir = "outputs2/"
+            #     num_files = len([f for f in os.listdir(output_dir) if f.endswith(".npz")])
+            #     np.savez_compressed(os.path.join(output_dir, f"obs_{num_files}.npz"), **obs)
+                
+            # print("\n\ncurrent camera tag you should copy")
+            # camera_pos, camera_quat = T.mat2pose(file_camera_pose)
+            # camera_quat = T.convert_quat(camera_quat, to="wxyz")
+            # cam_tree.set("pos", "{} {} {}".format(camera_pos[0], camera_pos[1], camera_pos[2]))
+            # cam_tree.set("quat", "{} {} {} {}".format(camera_quat[0], camera_quat[1], camera_quat[2], camera_quat[3]))
+            # print(ET.tostring(cam_tree, encoding="utf8").decode("utf8"))
+        time.sleep(0.1)
