@@ -4,7 +4,7 @@ import os
 import json
 import open3d as o3d
 from scipy.spatial.transform import Rotation as R
-
+import robosuite.utils.transform_utils as T
 
 def backproject(depth, intrinsics, instance_mask, NOCS_convention=False):
     intrinsics_inv = np.linalg.inv(intrinsics)
@@ -58,39 +58,56 @@ def visualize_points_o3d(points, colors):
     pcd.colors = o3d.utility.Vector3dVector(colors)
     return pcd
 
+
+def visualize_transform_o3d(pose, size=0.5):
+    axis_o3d = o3d.geometry.TriangleMesh.create_coordinate_frame(size=size)
+    axis_o3d.transform(pose)
+    return axis_o3d
+
 output_dir = "outputs/"
 obs_files = [f for f in os.listdir(output_dir) if f.endswith(".npz")]
 obs_files.sort()
 vis_o3d = []
- 
-rot_diff = R.from_euler('xyz', [180, 0, 180], degrees=True).as_matrix()
-for obs_file_id in range(1, len(obs_files)-2):
+
+dT = np.array([[-1, 0, 0, 0], 
+               [0, -1, 0, 0], 
+               [0, 0, -1, 0], 
+               [0, 0, 0, 1]])
+for obs_file_id in range(1, len(obs_files)+1):
     obs_file = f"obs_{obs_file_id * 10}.npz"
     obs = np.load(os.path.join(output_dir, obs_file))
     intrinsics = obs["frontview_intrinsics"]
     color = obs["frontview_image"][:, :, :]
     depth = obs["frontview_depth"][:, :, 0] 
-
+    cube_pos = obs["cube_pos"]
+    cube_quat = obs["cube_quat"]
+    robot0_eef_pos = obs["robot0_eef_pos"]
+    robot0_eef_quat = obs["robot0_eef_quat"]
+    cube_pose = T.make_pose(cube_pos, T.quat2mat(cube_quat))
+    robot0_eef_pose = T.make_pose(robot0_eef_pos, T.quat2mat(robot0_eef_quat))
+    
     world_camera_pose =  obs["world_camera_pose"]
     world_camera_pose2 = obs["world_camera_pose2"]
     file_camera_pose = obs["file_camera_pose"]
-    world_camera_rot = world_camera_pose[:3, :3]
-    world_camera_rot2 = world_camera_pose2[:3, :3]
-    world_camera_tra = world_camera_pose[:3, 3]
-    world_camera_tra2 = world_camera_pose2[:3, 3]
-    # world_camera_rot = rot_diff @ world_camera_rot
-    # rot_diff = world_camera_rot2 @ world_camera_rot.T
-    # rot_deg = R.from_matrix(rot_diff).as_euler('xyz', degrees=True)
-    # tra_diff = world_camera_tra2 - world_camera_tra
-    # print(rot_deg)
-    # print(tra_diff)
+    # file_camera_pose = dT @ file_camera_pose
+    # world_camera_pose = dT @ world_camera_pose
+    # dT = world_camera_pose2 @ T.pose_inv(world_camera_pose)
+    # print(dT)
+
     pose = world_camera_pose2
-    
     points, idxs = backproject(depth, intrinsics, depth>0)
     points = points @ pose[:3, :3].T + pose[:3, 3]
     point_colors = color[idxs[0], idxs[1], :] / 255.0
     pcd = visualize_points_o3d(points, point_colors)
-    vis_o3d.append(pcd)
+
+    pcd = visualize_points_o3d(points, point_colors)
+    cube_pcd = visualize_sphere_o3d(cube_pos, color=[0, 1, 0], size=0.08)
+    robot_pcd = visualize_sphere_o3d(robot0_eef_pos, color=[0, 0, 1], size=0.08)
+    cube_transform = visualize_transform_o3d(cube_pose)
+    robot_transform = visualize_transform_o3d(robot0_eef_pose)
+    
+
+    vis_o3d += [pcd] #, cube_pcd, robot_pcd, cube_transform, robot_transform]
     # o3d.visualization.draw_geometries([pcd])
 
 o3d.visualization.draw(vis_o3d)

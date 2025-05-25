@@ -175,7 +175,7 @@ if __name__ == "__main__":
         camera_names="frontview",
     )
     env.reset()
-
+    
     # Create the camera mover
     camera_mover = CameraMover(
         env=env,

@@ -275,10 +275,10 @@ class CameraMover:
 
         # Grab environment xml
         xml = env.sim.model.get_xml()
+        import pdb; pdb.set_trace()
 
         # Modify xml to add mocap to move camera around
         xml = self.modify_xml_for_camera_movement(xml=xml, camera_name=self.camera)
-
         # Reset the environment and restore the state
         self.env.reset_from_xml_string(xml)
         self.env.sim.reset()
