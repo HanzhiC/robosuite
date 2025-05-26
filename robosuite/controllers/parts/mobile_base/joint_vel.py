@@ -215,7 +215,6 @@ class MobileBaseJointVelocityController(MobileBaseController):
         # do the reverse of theta rotation
         base_action[0] = x * np.cos(theta) + y * np.sin(theta)
         base_action[1] = -x * np.sin(theta) + y * np.cos(theta)
-
         self.goal_qvel = base_action
         if self.interpolator is not None:
             self.interpolator.set_goal(self.goal_qvel)
